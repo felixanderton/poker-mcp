@@ -50,7 +50,7 @@ Converts human-readable range strings (e.g. `"AA,KK,AKs"`) to the hand-matrix fo
 Takes a strategy frequency dict keyed by hand combo and renders a 13×13 grid using matplotlib. Supports bet/check/fold as distinct colours, blended cells for mixed strategies, and a legend. Returns a PNG `bytes` object wrapped in `FastMCP Image`.
 
 ### FastMCP Server (`src/server.py`)
-Registers three tools: `solve_spot`, `explain_hand`, `list_presets`. Implements a bearer-token middleware that rejects unauthenticated requests before any tool logic runs. Token is read from the `SOLVER_TOKEN` environment variable (populated by Cloud Run from Secret Manager).
+Registers three tools: `solve_spot`, `explain_hand`, `list_presets`. Authenticates users with Google via FastMCP's `GoogleProvider` (OAuth), so OAuth-only clients like the claude.ai connector can sign in with no custom headers. `GOOGLE_CLIENT_ID` / `OAUTH_BASE_URL` are env vars and `GOOGLE_CLIENT_SECRET` is injected from Secret Manager; when `GOOGLE_CLIENT_ID` is unset the server runs unauthenticated for local dev.
 
 ## Data Flow
 
@@ -85,4 +85,4 @@ LLM receives frequencies / EV / exploitability
 | 2026-06-16 | Bounded synchronous solve (time_limit + max_iterations + accuracy caps) | Cloud Run has a hard request timeout; unbounded solves would cause 504s and unpredictable costs. Caps keep p99 latency within the timeout budget. |
 | 2026-06-16 | Cloud Run concurrency=1 | `console_solver` is single-threaded and writes to temp files; multiplexing within one instance risks file collisions and solver corruption. Scale-out is handled by Cloud Run spawning additional instances. |
 | 2026-06-16 | Public repository (AGPL compliance) | TexasSolver is AGPL-licensed. Running it inside a network service without making the enclosing source available would violate the AGPL. A public repo satisfies the source-available requirement. |
-| 2026-06-16 | Static bearer token via Secret Manager | Simpler than GCP IAM for LLM-client integrations; avoids requiring the caller to hold a GCP service-account credential. Token rotation is handled by updating the Secret Manager version and redeploying. |
+| 2026-06-16 | Google OAuth (FastMCP GoogleProvider) instead of a static bearer token | The claude.ai custom connector only supports OAuth, not custom headers. GoogleProvider makes the server an OAuth resource that logs users in with Google; `max-instances 1` keeps the in-memory OAuth handshake state on one instance, and the JWT signing key is derived from the client secret so tokens survive cold starts. |

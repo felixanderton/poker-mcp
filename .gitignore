@@ -1,0 +1,29 @@
+# Secrets / local config
+.mcp.json
+.claude/settings.local.json
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Solver build artifacts / runtime output
+TexasSolver/
+build/
+output_result.json
+*.tmp
+
+# OS
+.DS_Store

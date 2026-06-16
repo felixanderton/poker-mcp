@@ -1,0 +1,16 @@
+.git
+.github
+.claude
+.venv
+**/__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+tests
+.mcp.json
+.env
+*.md
+!README.md
+ARCHITECTURE.md
+plans
+TexasSolver
