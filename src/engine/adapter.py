@@ -29,7 +29,8 @@ SOLVER_PATH_ENV = "CONSOLE_SOLVER_PATH"
 SOLVER_ROOT_ENV = "CONSOLE_SOLVER_ROOT"
 
 _STREETS = ("flop", "turn", "river")
-_PERCENT_RE = re.compile(r"exploitability[^\n]*?([0-9]*\.?[0-9]+)\s*%", re.IGNORECASE)
+# TexasSolver prints e.g. "Total exploitability 1.25 precent" (sic) as a percent of pot.
+_EXPLOIT_RE = re.compile(r"Total exploitability\s+([0-9]*\.?[0-9]+)", re.IGNORECASE)
 _ITER_RE = re.compile(r"iter[^0-9]*([0-9]+)", re.IGNORECASE)
 _PASSIVE_PREFIXES = ("CHECK", "CALL")
 
@@ -125,9 +126,9 @@ def _extract(tree: dict[str, Any]) -> tuple[ComboStrategy, ComboStrategy, list[s
 
 
 def _parse_progress(stdout: str) -> tuple[float | None, int | None]:
-    percents = _PERCENT_RE.findall(stdout)
+    exploits = _EXPLOIT_RE.findall(stdout)
     iters = _ITER_RE.findall(stdout)
-    exploitability = float(percents[-1]) if percents else None
+    exploitability = float(exploits[-1]) if exploits else None
     iterations = int(iters[-1]) if iters else None
     return exploitability, iterations
 

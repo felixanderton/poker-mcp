@@ -51,7 +51,11 @@ def test_extract_strategies_from_fixture() -> None:
 
 
 def test_parse_progress() -> None:
-    stdout = "iter: 10 ...\niter: 20 exploitability: 1.23%\niter: 30 exploitability: 0.40%"
+    # Matches TexasSolver's real console output format (note the "precent" typo).
+    stdout = (
+        "Iter: 10\nplayer 0 exploitability 3.1\nTotal exploitability 1.23 precent\n"
+        "Iter: 30\nplayer 0 exploitability 1.0\nTotal exploitability 0.40 precent"
+    )
     exploitability, iterations = _parse_progress(stdout)
     assert exploitability == 0.40
     assert iterations == 30

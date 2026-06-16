@@ -46,6 +46,11 @@ mcp: FastMCP = FastMCP(
 )
 
 
+@mcp.custom_route(_HEALTH_PATH, methods=["GET"])
+async def healthz(_: Request) -> Response:
+    return JSONResponse({"status": "ok"})
+
+
 class BearerTokenMiddleware(BaseHTTPMiddleware):
     """Reject requests whose bearer token does not match ``SOLVER_TOKEN``."""
 
@@ -206,18 +211,15 @@ def build_app() -> ASGIApp:
     if not token:
         raise RuntimeError(f"{TOKEN_ENV} must be set to a non-empty bearer token")
     middleware = [Middleware(BearerTokenMiddleware, token=token)]
-    return mcp.http_app(middleware=middleware)
-
-
-async def _healthz(_: Request) -> Response:
-    return JSONResponse({"status": "ok"})
+    # stateless_http: each request is self-contained, so no in-memory session has to
+    # survive across Cloud Run instances (which have no session affinity by default).
+    return mcp.http_app(middleware=middleware, stateless_http=True)
 
 
 def main() -> None:
     import uvicorn
 
     app = build_app()
-    app.add_route(_HEALTH_PATH, _healthz)  # type: ignore[attr-defined]
     port = int(os.environ.get("PORT", "8080"))
     uvicorn.run(app, host="0.0.0.0", port=port)
 

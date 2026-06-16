@@ -81,18 +81,22 @@ if large trees run out of memory.
 
 ## Connect an MCP client
 
-Point your MCP client at `https://<service-url>/mcp/` with the bearer token:
+Point your MCP client at `https://<service-url>/mcp` (no trailing slash) with the bearer token:
 
 ```json
 {
   "mcpServers": {
     "poker": {
-      "url": "https://poker-mcp-xxxx.run.app/mcp/",
+      "url": "https://poker-mcp-xxxx.run.app/mcp",
       "headers": { "Authorization": "Bearer <your-token>" }
     }
   }
 }
 ```
+
+> Use `/mcp` **without** a trailing slash. `/mcp/` issues a redirect that, behind Cloud Run's
+> TLS termination, downgrades to `http://` — and HTTP clients strip the `Authorization` header
+> across that redirect, causing a 401.
 
 ## Architecture & decisions
 
