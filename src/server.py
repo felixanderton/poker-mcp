@@ -156,9 +156,9 @@ def solve_spot(
     effective_stack: float,
     bet_sizes: list[float] | None = None,
     raise_sizes: list[float] | None = None,
-    accuracy: float = 0.5,
-    max_iterations: int = 150,
-    time_limit_s: float = 60.0,
+    accuracy: float = 1.0,
+    max_iterations: int = 100,
+    time_limit_s: float = 180.0,
     grid_for: Literal["oop", "ip"] = "oop",
     grid_metric: GridMetric = "bet",
 ) -> list[str | Image]:
@@ -209,9 +209,9 @@ def explain_hand(
     effective_stack: float,
     bet_sizes: list[float] | None = None,
     raise_sizes: list[float] | None = None,
-    accuracy: float = 0.5,
-    max_iterations: int = 150,
-    time_limit_s: float = 60.0,
+    accuracy: float = 1.0,
+    max_iterations: int = 100,
+    time_limit_s: float = 180.0,
 ) -> str:
     """Solve a spot and explain one hand's strategy (e.g. ``hand="AKs"`` or ``"AhKh"``).
 

@@ -91,7 +91,7 @@ gcloud run deploy poker-mcp \
   --memory 4Gi --cpu 4 \
   --concurrency 10 \
   --min-instances 0 --max-instances 1 \
-  --timeout 300 \
+  --timeout 600 \
   --allow-unauthenticated \
   --set-env-vars GOOGLE_CLIENT_ID=<client-id>,OAUTH_BASE_URL=https://<service-url> \
   --set-secrets GOOGLE_CLIENT_SECRET=google-oauth-client-secret:latest

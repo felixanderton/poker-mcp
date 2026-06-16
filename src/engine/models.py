@@ -45,13 +45,23 @@ class SolveRequest(BaseModel):
     )
 
     accuracy: float = Field(
-        default=0.5,
+        default=1.0,
         gt=0,
-        description="Target exploitability as percent of pot; solving stops once reached",
+        description="Target exploitability as percent of pot; solving stops once reached. "
+        "Lower is more precise but slower; ~1-2% is plenty for most analysis.",
     )
-    max_iterations: int = Field(default=150, ge=1, le=2000)
+    max_iterations: int = Field(
+        default=100,
+        ge=1,
+        le=2000,
+        description="Cap on solver iterations; it always returns the best strategy reached.",
+    )
     time_limit_s: float = Field(
-        default=60.0, gt=0, le=290, description="Hard wall-clock cap on the solve subprocess"
+        default=180.0,
+        gt=0,
+        le=540,
+        description="Hard wall-clock safety cap. Hitting it kills the solve with no result, so "
+        "prefer bounding via accuracy/max_iterations; this is only a backstop.",
     )
     threads: int = Field(default=0, ge=0, description="Solver threads; 0 selects all cores")
     use_isomorphism: bool = Field(default=True)
