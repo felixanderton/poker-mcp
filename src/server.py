@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
+from collections import OrderedDict
 from typing import Literal
 
 from fastmcp import FastMCP
@@ -72,6 +74,30 @@ mcp: FastMCP = FastMCP(
 @mcp.custom_route(_HEALTH_PATH, methods=["GET"])
 async def healthz(_: Request) -> Response:
     return JSONResponse({"status": "ok"})
+
+
+# Some MCP clients (e.g. the claude.ai web connector) don't render image content returned
+# from a tool, so we also host each rendered grid at an unguessable public URL and hand that
+# URL back in the tool's text. Kept in a small in-memory LRU on the (single) instance.
+_GRID_CACHE: OrderedDict[str, bytes] = OrderedDict()
+_GRID_CACHE_MAX = 50
+_PUBLIC_BASE_URL = os.environ.get("OAUTH_BASE_URL", "").rstrip("/")
+
+
+def _store_grid(png: bytes) -> str:
+    grid_id = f"{uuid.uuid4().hex}.png"
+    _GRID_CACHE[grid_id] = png
+    while len(_GRID_CACHE) > _GRID_CACHE_MAX:
+        _GRID_CACHE.popitem(last=False)
+    return f"{_PUBLIC_BASE_URL}/grid/{grid_id}"
+
+
+@mcp.custom_route("/grid/{grid_id}", methods=["GET"])
+async def get_grid(request: Request) -> Response:
+    png = _GRID_CACHE.get(request.path_params["grid_id"])
+    if png is None:
+        return Response(status_code=404)
+    return Response(content=png, media_type="image/png")
 
 
 def _build_request(**kwargs: object) -> SolveRequest:
@@ -163,7 +189,14 @@ def solve_spot(
     who = "OOP (first to act)" if grid_for == "oop" else "IP (facing check)"
     title = f"{who} - {result.board}"
     png = render_grid(strategy, grid_metric, title)
-    return [_summary(result), Image(data=png, format="png")]
+    url = _store_grid(png)
+    summary = (
+        f"{_summary(result)}\n\n"
+        f"13x13 {grid_for} {grid_metric} grid: {url}\n"
+        f"![grid]({url})\n"
+        "(Show this grid image to the user.)"
+    )
+    return [summary, Image(data=png, format="png")]
 
 
 @mcp.tool
