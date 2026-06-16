@@ -21,7 +21,7 @@ import uuid
 from collections import OrderedDict
 from typing import Literal
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from fastmcp.apps.config import AppConfig, ResourceCSP
 from fastmcp.server.auth.providers.google import GoogleProvider
 from fastmcp.tools import ToolResult
@@ -171,7 +171,8 @@ def _summary(result: SolveResult) -> str:
 
 
 @mcp.tool(app=AppConfig(resource_uri=_GRID_UI_URI))
-def solve_spot(
+async def solve_spot(
+    ctx: Context,
     oop_range: str,
     ip_range: str,
     board: str,
@@ -185,15 +186,23 @@ def solve_spot(
     grid_for: Literal["oop", "ip"] = "oop",
     grid_metric: GridMetric = "bet",
 ) -> ToolResult:
-    """Solve a postflop spot and return GTO frequencies plus a 13x13 strategy grid.
+    """Solve a postflop spot; returns an interactive 13x13 grid plus GTO frequencies.
 
-    Ranges use solver syntax, e.g. ``"AA,KK,QQ,AKs,AKo:0.5"``. Board is 3-5 cards like
-    ``"Qs Jh 2h"`` (flop) or ``"Qs Jh 2h 8d"`` (turn). ``bet_sizes``/``raise_sizes`` are
-    percentages (of pot / of the facing bet); defaults are ``[50]`` and ``[60]`` plus all-in.
-    ``grid_for`` chooses whose strategy to plot (``oop`` = first to act, ``ip`` = facing a
-    check); ``grid_metric`` is ``bet``, ``check``, ``fold`` or ``blended`` (RGB mix).
+    Range syntax (comma-separated): pairs like ``QQ``, suited/offsuit like ``AKs``/``AKo``,
+    ``+`` for "and better" (``QQ+``, ``ATs+``, ``A2s+``), and weights like ``AKo:0.5``. The
+    ``+`` shorthand IS supported -- do not pre-expand it. Example:
+    ``"QQ+,AKs,AKo,AJs+,KQs,A5s"``.
 
-    Returns a text summary followed by the grid image rendered inline.
+    Board is 3-5 cards separated by spaces or commas, e.g. ``"Jh 9c 5d"`` (flop) or
+    ``"Jh 9c 5d 2s"`` (turn); ranks ``23456789TJQKA``, suits ``cdhs``.
+
+    ``bet_sizes``/``raise_sizes`` are percentages (of pot / of the facing bet); defaults are
+    ``[50]`` and ``[60]`` plus all-in. ``grid_for`` chooses whose strategy to plot
+    (``oop`` = first to act, ``ip`` = facing a check); ``grid_metric`` is ``bet``, ``check``,
+    ``fold`` or ``blended`` (RGB mix).
+
+    Presentation: lead with the grid visualization first, then give a short explanation of the
+    notable mixed/pure regions -- do not restate every cell.
     """
     request = _build_request(
         oop_range=oop_range,
@@ -207,7 +216,16 @@ def solve_spot(
         max_iterations=max_iterations,
         time_limit_s=time_limit_s,
     )
-    result = solve(request)
+
+    async def on_progress(iteration: int | None, exploitability: float | None) -> None:
+        message = f"iteration {iteration or 0}/{max_iterations}"
+        if exploitability is not None:
+            message += f", exploitability {exploitability:.2f}% of pot"
+        await ctx.report_progress(
+            progress=float(iteration or 0), total=float(max_iterations), message=message
+        )
+
+    result = await solve(request, on_progress)
     strategy = result.oop_strategy if grid_for == "oop" else result.ip_strategy
     who = "OOP (first to act)" if grid_for == "oop" else "IP (facing check)"
     title = f"{who} - {result.board}"
@@ -230,17 +248,18 @@ def solve_spot(
             "ip": class_grid(result.ip_strategy),
         },
     }
+    # Lead with the visual (image/app artifact), then the text explanation.
     return ToolResult(
         content=[
-            TextContent(type="text", text=summary),
             Image(data=png, format="png").to_image_content(),
+            TextContent(type="text", text=summary),
         ],
         structured_content=payload,
     )
 
 
 @mcp.tool
-def explain_hand(
+async def explain_hand(
     hand: str,
     oop_range: str,
     ip_range: str,
@@ -270,7 +289,7 @@ def explain_hand(
         max_iterations=max_iterations,
         time_limit_s=time_limit_s,
     )
-    result = solve(request)
+    result = await solve(request)
     return (
         f"Hand {hand} on {result.board}:\n\n"
         f"As OOP (first to act):\n{_fmt_freqs(_class_breakdown(result.oop_strategy, hand))}\n\n"

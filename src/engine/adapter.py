@@ -8,12 +8,14 @@ so the same code runs locally and in the Cloud Run image.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import re
-import subprocess
 import time
+from collections import deque
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -21,6 +23,9 @@ from typing import Any
 from engine.models import ComboStrategy, SolveRequest, SolveResult
 
 logger = logging.getLogger(__name__)
+
+# Called as the solver streams progress: (iteration, exploitability_pct), either may be None.
+type ProgressCallback = Callable[[int | None, float | None], Awaitable[None]]
 
 # Where to find the compiled binary and its ``resources/`` directory. The solver
 # loads lookup tables by a path relative to its working directory, so it must be
@@ -63,7 +68,7 @@ def build_solver_input(req: SolveRequest, dump_path: Path) -> str:
         f"set_thread_num {threads}",
         f"set_accuracy {req.accuracy:g}",
         f"set_max_iteration {req.max_iterations}",
-        "set_print_interval 10",
+        "set_print_interval 5",
         f"set_use_isomorphism {1 if req.use_isomorphism else 0}",
         "start_solve",
         "set_dump_rounds 2",
@@ -140,8 +145,12 @@ def _solver_command(input_path: Path) -> tuple[list[str], Path]:
     return [binary, "-i", str(input_path)], cwd
 
 
-def solve(req: SolveRequest) -> SolveResult:
-    """Run the solver for ``req`` and return the parsed result."""
+async def solve(req: SolveRequest, on_progress: ProgressCallback | None = None) -> SolveResult:
+    """Run the solver for ``req``, streaming progress, and return the parsed result.
+
+    ``on_progress`` is awaited each time the solver reports a new iteration or
+    exploitability value, so callers can surface live progress to the client.
+    """
     with TemporaryDirectory(prefix="poker-mcp-") as tmp:
         tmp_path = Path(tmp)
         input_path = tmp_path / "input.txt"
@@ -151,16 +160,37 @@ def solve(req: SolveRequest) -> SolveResult:
         command, cwd = _solver_command(input_path)
         logger.info("Running solver: %s (cwd=%s)", " ".join(command), cwd)
         start = time.monotonic()
+        proc = await asyncio.create_subprocess_exec(
+            *command,
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        last_iter: int | None = None
+        last_expl: float | None = None
+        recent: deque[str] = deque(maxlen=40)
+
+        async def _read() -> None:
+            nonlocal last_iter, last_expl
+            assert proc.stdout is not None
+            async for raw in proc.stdout:
+                line = raw.decode("utf-8", "replace")
+                recent.append(line)
+                match_iter = _ITER_RE.search(line)
+                match_expl = _EXPLOIT_RE.search(line)
+                if match_iter:
+                    last_iter = int(match_iter.group(1))
+                if match_expl:
+                    last_expl = float(match_expl.group(1))
+                if on_progress is not None and (match_iter or match_expl):
+                    await on_progress(last_iter, last_expl)
+
         try:
-            proc = subprocess.run(
-                command,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=req.time_limit_s,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
+            await asyncio.wait_for(_read(), timeout=req.time_limit_s)
+            await asyncio.wait_for(proc.wait(), timeout=10)
+        except TimeoutError as exc:
+            proc.kill()
+            await proc.wait()
             raise RuntimeError(
                 f"Solver exceeded time_limit_s={req.time_limit_s}s. Lower max_iterations, "
                 "raise accuracy, or shrink the bet-size tree."
@@ -168,22 +198,21 @@ def solve(req: SolveRequest) -> SolveResult:
         elapsed = time.monotonic() - start
 
         if proc.returncode != 0:
-            raise RuntimeError(f"Solver exited {proc.returncode}: {proc.stderr.strip()[:500]}")
+            raise RuntimeError(f"Solver exited {proc.returncode}: {''.join(recent).strip()[:500]}")
         if not dump_path.exists():
             raise RuntimeError("Solver finished but produced no output_result.json")
 
         tree = json.loads(dump_path.read_text(encoding="utf-8"))
         oop_strategy, ip_strategy, oop_actions, ip_actions = _extract(tree)
-        exploitability, iterations = _parse_progress(proc.stdout)
 
     return SolveResult(
         board=req.board,
         pot=req.pot,
         effective_stack=req.effective_stack,
-        iterations=iterations,
-        exploitability_pct=exploitability,
+        iterations=last_iter,
+        exploitability_pct=last_expl,
         solve_time_s=round(elapsed, 2),
-        converged=exploitability is not None and exploitability <= req.accuracy,
+        converged=last_expl is not None and last_expl <= req.accuracy,
         oop_root_actions=oop_actions,
         ip_actions_facing_check=ip_actions,
         oop_strategy=oop_strategy,
