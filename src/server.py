@@ -25,7 +25,6 @@ from fastmcp import Context, FastMCP
 from fastmcp.apps.config import AppConfig, ResourceCSP
 from fastmcp.server.auth.providers.google import GoogleProvider
 from fastmcp.tools import ToolResult
-from fastmcp.utilities.types import Image
 from mcp.types import TextContent
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -34,7 +33,7 @@ from starlette.types import ASGIApp
 from engine.adapter import solve
 from engine.models import ComboStrategy, SolveRequest, SolveResult
 from engine.ranges import combo_to_class, list_presets
-from rendering.grid import GridMetric, class_grid, render_grid
+from rendering.grid import ClassGrid, GridMetric, class_grid, render_grid
 from ui.grid_app import GRID_APP_HTML
 
 logging.basicConfig(level=logging.INFO)
@@ -146,6 +145,19 @@ def _class_breakdown(strategy: ComboStrategy, hand: str) -> dict[str, float]:
     return _overall(combos)
 
 
+def _compact_player(grid: ClassGrid) -> dict[str, dict[str, object]]:
+    """Shrink a class grid for the wire: round, and drop near-zero action entries."""
+    out: dict[str, dict[str, object]] = {}
+    for cls, cell in grid.items():
+        out[cls] = {
+            "bet": round(cell["bet"], 3),
+            "check": round(cell["check"], 3),
+            "fold": round(cell["fold"], 3),
+            "actions": {k: round(v, 3) for k, v in cell["actions"].items() if v >= 0.01},
+        }
+    return out
+
+
 def _fmt_freqs(freqs: dict[str, float]) -> str:
     if not freqs:
         return "  (no actions / hand not in range)"
@@ -229,13 +241,14 @@ async def solve_spot(
     strategy = result.oop_strategy if grid_for == "oop" else result.ip_strategy
     who = "OOP (first to act)" if grid_for == "oop" else "IP (facing check)"
     title = f"{who} - {result.board}"
-    png = render_grid(strategy, grid_metric, title)
-    url = _store_grid(png)
+    # Render the grid and host it at a URL. We deliberately do NOT embed the base64 image in
+    # the tool result: claude.ai doesn't render tool images, and the ~50 KB blob overflowed the
+    # connector's response-chunk limit. The interactive app renders from structuredContent;
+    # the URL is the static fallback.
+    url = _store_grid(render_grid(strategy, grid_metric, title))
     summary = (
         f"{_summary(result)}\n\n"
-        f"13x13 {grid_for} {grid_metric} grid: {url}\n"
-        f"![grid]({url})\n"
-        "(An interactive grid also renders inline; this URL is a fallback.)"
+        f"Interactive 13x13 grid renders inline. Static image: {url}"
     )
     payload: dict[str, object] = {
         "board": result.board,
@@ -244,18 +257,11 @@ async def solve_spot(
         "grid_for": grid_for,
         "grid_metric": grid_metric,
         "players": {
-            "oop": class_grid(result.oop_strategy),
-            "ip": class_grid(result.ip_strategy),
+            "oop": _compact_player(class_grid(result.oop_strategy)),
+            "ip": _compact_player(class_grid(result.ip_strategy)),
         },
     }
-    # Lead with the visual (image/app artifact), then the text explanation.
-    return ToolResult(
-        content=[
-            Image(data=png, format="png").to_image_content(),
-            TextContent(type="text", text=summary),
-        ],
-        structured_content=payload,
-    )
+    return ToolResult(content=[TextContent(type="text", text=summary)], structured_content=payload)
 
 
 @mcp.tool
