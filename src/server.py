@@ -5,22 +5,23 @@ Tools:
     * ``explain_hand`` -- solve a spot and explain one specific hand's strategy
     * ``list_presets`` -- list the built-in preflop range presets
 
-Auth is a static bearer token read from ``SOLVER_TOKEN`` and enforced by an ASGI
-middleware before any tool runs. The token is injected at runtime from Google
-Secret Manager on Cloud Run.
+Auth is Google OAuth via FastMCP's ``GoogleProvider``: the server is an OAuth-protected
+resource that logs users in with Google, so OAuth-only MCP clients (e.g. the claude.ai
+custom connector) can connect with no custom headers. Credentials come from the
+``GOOGLE_CLIENT_ID`` / ``GOOGLE_CLIENT_SECRET`` env vars (secret from Secret Manager on
+Cloud Run); ``OAUTH_BASE_URL`` is the public service URL. If ``GOOGLE_CLIENT_ID`` is unset
+the server runs unauthenticated, which is convenient for local development.
 """
 
 from __future__ import annotations
 
-import hmac
 import logging
 import os
 from typing import Literal
 
 from fastmcp import FastMCP
+from fastmcp.server.auth.providers.google import GoogleProvider
 from fastmcp.utilities.types import Image
-from starlette.middleware import Middleware
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
@@ -33,8 +34,29 @@ from rendering.grid import GridMetric, render_grid
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("poker_mcp")
 
-TOKEN_ENV = "SOLVER_TOKEN"
 _HEALTH_PATH = "/healthz"
+# Redirect URIs the claude.ai / claude.com custom connectors use to receive the auth code.
+_CLAUDE_REDIRECT_URIS = [
+    "https://claude.ai/api/mcp/auth_callback",
+    "https://claude.com/api/mcp/auth_callback",
+]
+
+
+def _build_auth() -> GoogleProvider | None:
+    """Build the Google OAuth provider from env, or None to run unauthenticated."""
+    client_id = os.environ.get("GOOGLE_CLIENT_ID")
+    if not client_id:
+        logger.warning("GOOGLE_CLIENT_ID not set; running without authentication")
+        return None
+    return GoogleProvider(
+        client_id=client_id,
+        client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
+        base_url=os.environ.get("OAUTH_BASE_URL", "http://localhost:8080"),
+        required_scopes=["openid", "https://www.googleapis.com/auth/userinfo.email"],
+        allowed_client_redirect_uris=_CLAUDE_REDIRECT_URIS,
+        require_authorization_consent=False,
+    )
+
 
 mcp: FastMCP = FastMCP(
     "poker-mcp",
@@ -43,29 +65,13 @@ mcp: FastMCP = FastMCP(
         "syntax (e.g. 'AA,KK,AKs:0.5'), a 3-5 card board, pot, and effective stack. Tools "
         "return action frequencies, exploitability, and a 13x13 starting-hand strategy grid."
     ),
+    auth=_build_auth(),
 )
 
 
 @mcp.custom_route(_HEALTH_PATH, methods=["GET"])
 async def healthz(_: Request) -> Response:
     return JSONResponse({"status": "ok"})
-
-
-class BearerTokenMiddleware(BaseHTTPMiddleware):
-    """Reject requests whose bearer token does not match ``SOLVER_TOKEN``."""
-
-    def __init__(self, app: ASGIApp, token: str) -> None:
-        super().__init__(app)
-        self._token = token
-
-    async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
-        if request.url.path == _HEALTH_PATH:
-            return await call_next(request)
-        header = request.headers.get("authorization", "")
-        scheme, _, presented = header.partition(" ")
-        if scheme.lower() != "bearer" or not hmac.compare_digest(presented, self._token):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return await call_next(request)
 
 
 def _build_request(**kwargs: object) -> SolveRequest:
@@ -206,14 +212,10 @@ def list_range_presets() -> dict[str, str]:
 
 
 def build_app() -> ASGIApp:
-    """Build the streamable-http ASGI app with bearer-token auth."""
-    token = os.environ.get(TOKEN_ENV)
-    if not token:
-        raise RuntimeError(f"{TOKEN_ENV} must be set to a non-empty bearer token")
-    middleware = [Middleware(BearerTokenMiddleware, token=token)]
-    # stateless_http: each request is self-contained, so no in-memory session has to
-    # survive across Cloud Run instances (which have no session affinity by default).
-    return mcp.http_app(middleware=middleware, stateless_http=True)
+    """Build the streamable-http ASGI app (OAuth, if configured, is on the FastMCP server)."""
+    # stateless_http: each MCP request carries its own OAuth bearer token and is verified
+    # statelessly (JWT), so no per-session state has to survive across Cloud Run instances.
+    return mcp.http_app(stateless_http=True)
 
 
 def main() -> None:
@@ -221,7 +223,15 @@ def main() -> None:
 
     app = build_app()
     port = int(os.environ.get("PORT", "8080"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # proxy_headers/forwarded_allow_ips let the app trust Cloud Run's X-Forwarded-Proto so it
+    # builds https (not http) URLs for OAuth redirects and metadata.
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+    )
 
 
 if __name__ == "__main__":

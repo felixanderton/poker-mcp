@@ -5,7 +5,7 @@ description = "MCP server wrapping the TexasSolver GTO poker engine, with inline
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "fastmcp>=2.3",
+    "fastmcp>=3.4",
     "pydantic>=2.6",
     "matplotlib>=3.8",
     "numpy>=1.26",
