@@ -1,0 +1,61 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Read(*)",
+      "Edit(*)",
+      "Write(*)",
+      "Glob(*)",
+      "Grep(*)"
+    ],
+    "deny": [
+      "Bash(rm *)",
+      "Bash(git push*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -f*)",
+      "Bash(git restore *)",
+      "Bash(git checkout -- *)",
+      "Bash(sudo *)",
+      "Bash(kill *)",
+      "Bash(pkill *)",
+      "Bash(killall *)",
+      "Bash(npm publish*)",
+      "Bash(twine upload*)",
+      "Read(.env*)",
+      "Read(*.pem)",
+      "Read(*.key)",
+      "Read(~/clearml.conf)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash(git commit*)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'HOOK: About to commit — have you run the reviewer agent? If not, consider invoking it first.'"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "branch=$(git branch --show-current 2>/dev/null); if [[ \"$branch\" == hypothesis/H* ]]; then hyp_id=\"${branch#hypothesis/}\"; hyp_file=$(find . -name 'HYPOTHESES.md' -maxdepth 4 2>/dev/null | head -1); if [ -n \"$hyp_file\" ] && awk \"/^## $hyp_id[^0-9]/,/^## H[0-9]/{print}\" \"$hyp_file\" 2>/dev/null | grep -q '\\`\\[x\\]\\`'; then echo \"BLOCKED: '$branch' is a concluded hypothesis branch. Switch to dev and create a new branch before making changes: git checkout dev && git checkout -b hypothesis/H{next}\"; exit 2; fi; fi"
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "branch=$(git branch --show-current 2>/dev/null); if [[ \"$branch\" == hypothesis/H* ]]; then hyp_id=\"${branch#hypothesis/}\"; hyp_file=$(find . -name 'HYPOTHESES.md' -maxdepth 4 2>/dev/null | head -1); if [ -n \"$hyp_file\" ] && awk \"/^## $hyp_id[^0-9]/,/^## H[0-9]/{print}\" \"$hyp_file\" 2>/dev/null | grep -q '\\`\\[x\\]\\`'; then echo \"BLOCKED: '$branch' is a concluded hypothesis branch. Switch to dev and create a new branch before making changes: git checkout dev && git checkout -b hypothesis/H{next}\"; exit 2; fi; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
