@@ -22,8 +22,11 @@ from collections import OrderedDict
 from typing import Literal
 
 from fastmcp import FastMCP
+from fastmcp.apps.config import AppConfig, ResourceCSP
 from fastmcp.server.auth.providers.google import GoogleProvider
+from fastmcp.tools import ToolResult
 from fastmcp.utilities.types import Image
+from mcp.types import TextContent
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
@@ -31,7 +34,8 @@ from starlette.types import ASGIApp
 from engine.adapter import solve
 from engine.models import ComboStrategy, SolveRequest, SolveResult
 from engine.ranges import combo_to_class, list_presets
-from rendering.grid import GridMetric, render_grid
+from rendering.grid import GridMetric, class_grid, render_grid
+from ui.grid_app import GRID_APP_HTML
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("poker_mcp")
@@ -100,6 +104,25 @@ async def get_grid(request: Request) -> Response:
     return Response(content=png, media_type="image/png")
 
 
+# Interactive 13x13 grid rendered inline by the claude.ai connector (MCP Apps extension).
+# The HTML View loads the ext-apps SDK from esm.sh, so the iframe CSP must allow it.
+_GRID_UI_URI = "ui://poker-mcp/grid"
+
+
+@mcp.resource(
+    _GRID_UI_URI,
+    mime_type="text/html",
+    app=AppConfig(
+        csp=ResourceCSP(
+            resource_domains=["https://esm.sh"],
+            connect_domains=["https://esm.sh"],
+        )
+    ),
+)
+def grid_ui() -> str:
+    return GRID_APP_HTML
+
+
 def _build_request(**kwargs: object) -> SolveRequest:
     return SolveRequest.model_validate(kwargs)
 
@@ -147,7 +170,7 @@ def _summary(result: SolveResult) -> str:
     )
 
 
-@mcp.tool
+@mcp.tool(app=AppConfig(resource_uri=_GRID_UI_URI))
 def solve_spot(
     oop_range: str,
     ip_range: str,
@@ -161,7 +184,7 @@ def solve_spot(
     time_limit_s: float = 180.0,
     grid_for: Literal["oop", "ip"] = "oop",
     grid_metric: GridMetric = "bet",
-) -> list[str | Image]:
+) -> ToolResult:
     """Solve a postflop spot and return GTO frequencies plus a 13x13 strategy grid.
 
     Ranges use solver syntax, e.g. ``"AA,KK,QQ,AKs,AKo:0.5"``. Board is 3-5 cards like
@@ -194,9 +217,26 @@ def solve_spot(
         f"{_summary(result)}\n\n"
         f"13x13 {grid_for} {grid_metric} grid: {url}\n"
         f"![grid]({url})\n"
-        "(Show this grid image to the user.)"
+        "(An interactive grid also renders inline; this URL is a fallback.)"
     )
-    return [summary, Image(data=png, format="png")]
+    payload: dict[str, object] = {
+        "board": result.board,
+        "pot": result.pot,
+        "exploitability_pct": result.exploitability_pct,
+        "grid_for": grid_for,
+        "grid_metric": grid_metric,
+        "players": {
+            "oop": class_grid(result.oop_strategy),
+            "ip": class_grid(result.ip_strategy),
+        },
+    }
+    return ToolResult(
+        content=[
+            TextContent(type="text", text=summary),
+            Image(data=png, format="png").to_image_content(),
+        ],
+        structured_content=payload,
+    )
 
 
 @mcp.tool

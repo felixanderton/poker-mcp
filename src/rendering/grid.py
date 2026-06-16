@@ -8,7 +8,7 @@ concrete combos of that hand class present in the solver output.
 from __future__ import annotations
 
 import io
-from typing import Literal
+from typing import Literal, TypedDict
 
 import matplotlib
 
@@ -43,6 +43,46 @@ def _category_fractions(actions: dict[str, float]) -> tuple[float, float, float]
         elif upper.startswith("FOLD"):
             fold += prob
     return agg, passive, fold
+
+
+class ClassCell(TypedDict):
+    """Per-hand-class aggregate used by the interactive grid app."""
+
+    bet: float
+    check: float
+    fold: float
+    actions: dict[str, float]
+
+
+type ClassGrid = dict[str, ClassCell]
+
+
+def class_grid(strategy: ComboStrategy) -> ClassGrid:
+    """Aggregate a combo strategy into per-169-class cells for the interactive UI."""
+    bet: dict[str, float] = {}
+    check: dict[str, float] = {}
+    fold: dict[str, float] = {}
+    count: dict[str, int] = {}
+    actions: dict[str, dict[str, float]] = {}
+    for combo, combo_actions in strategy.items():
+        cls = combo_to_class(combo)
+        agg, passive, folded = _category_fractions(combo_actions)
+        bet[cls] = bet.get(cls, 0.0) + agg
+        check[cls] = check.get(cls, 0.0) + passive
+        fold[cls] = fold.get(cls, 0.0) + folded
+        count[cls] = count.get(cls, 0) + 1
+        acc = actions.setdefault(cls, {})
+        for label, freq in combo_actions.items():
+            acc[label] = acc.get(label, 0.0) + freq
+    grid: ClassGrid = {}
+    for cls, n in count.items():
+        grid[cls] = ClassCell(
+            bet=round(bet[cls] / n, 4),
+            check=round(check[cls] / n, 4),
+            fold=round(fold[cls] / n, 4),
+            actions={k: round(v / n, 4) for k, v in actions[cls].items()},
+        )
+    return grid
 
 
 def _scalar(actions: dict[str, float], metric: GridMetric) -> float:
