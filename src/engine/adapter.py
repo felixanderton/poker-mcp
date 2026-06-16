@@ -170,20 +170,36 @@ async def solve(req: SolveRequest, on_progress: ProgressCallback | None = None) 
         last_expl: float | None = None
         recent: deque[str] = deque(maxlen=40)
 
-        async def _read() -> None:
+        async def _handle(segment: str) -> None:
             nonlocal last_iter, last_expl
+            recent.append(segment)
+            match_iter = _ITER_RE.search(segment)
+            match_expl = _EXPLOIT_RE.search(segment)
+            if match_iter:
+                last_iter = int(match_iter.group(1))
+            if match_expl:
+                last_expl = float(match_expl.group(1))
+            if on_progress is not None and (match_iter or match_expl):
+                await on_progress(last_iter, last_expl)
+
+        async def _read() -> None:
+            # Read fixed-size chunks and split on CR and LF. The solver prints progress with
+            # carriage returns (no newline), so readline() would buffer past its 64 KB limit
+            # and raise LimitOverrunError.
             assert proc.stdout is not None
-            async for raw in proc.stdout:
-                line = raw.decode("utf-8", "replace")
-                recent.append(line)
-                match_iter = _ITER_RE.search(line)
-                match_expl = _EXPLOIT_RE.search(line)
-                if match_iter:
-                    last_iter = int(match_iter.group(1))
-                if match_expl:
-                    last_expl = float(match_expl.group(1))
-                if on_progress is not None and (match_iter or match_expl):
-                    await on_progress(last_iter, last_expl)
+            buffer = ""
+            while True:
+                chunk = await proc.stdout.read(65536)
+                if not chunk:
+                    break
+                buffer += chunk.decode("utf-8", "replace")
+                segments = re.split(r"[\r\n]+", buffer)
+                buffer = segments.pop()  # keep the trailing (possibly partial) segment
+                for segment in segments:
+                    if segment:
+                        await _handle(segment)
+            if buffer.strip():
+                await _handle(buffer)
 
         try:
             await asyncio.wait_for(_read(), timeout=req.time_limit_s)
